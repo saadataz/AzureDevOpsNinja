@@ -1,0 +1,147 @@
+{
+  "name": "ninja-reviewer",
+  "displayName": "Ninja Reviewer",
+  "description": "AI-powered Azure DevOps PR reviewer — hover over any line of code to get instant explanations",
+  "version": "0.1.0",
+  "publisher": "ninja-reviewer",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "ninjaReviewer",
+          "title": "Ninja Reviewer",
+          "icon": "resources/ninja.svg"
+        }
+      ]
+    },
+    "views": {
+      "ninjaReviewer": [
+        {
+          "id": "ninjaReviewer.prList",
+          "name": "Pull Requests"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "ninjaReviewer.prList",
+        "contents": "Welcome to Ninja Reviewer! 🥷\n\nConfigure your Azure DevOps connection to get started.\n\n[Configure](command:ninjaReviewer.configure)"
+      }
+    ],
+    "commands": [
+      {
+        "command": "ninjaReviewer.signIn",
+        "title": "Sign In",
+        "category": "Ninja Reviewer"
+      },
+      {
+        "command": "ninjaReviewer.refresh",
+        "title": "Refresh",
+        "category": "Ninja Reviewer",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "ninjaReviewer.configure",
+        "title": "Configure Organization",
+        "category": "Ninja Reviewer",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "ninjaReviewer.selectFavorites",
+        "title": "Select Favorite Repositories",
+        "category": "Ninja Reviewer",
+        "icon": "$(star)"
+      },
+      {
+        "command": "ninjaReviewer.openPR",
+        "title": "Open PR Description",
+        "category": "Ninja Reviewer"
+      },
+      {
+        "command": "ninjaReviewer.openDiff",
+        "title": "Open Diff",
+        "category": "Ninja Reviewer"
+      },
+      {
+        "command": "ninjaReviewer.replyComment",
+        "title": "Add Comment",
+        "category": "Ninja Reviewer"
+      },
+      {
+        "command": "ninjaReviewer.refreshComments",
+        "title": "Reload Comments",
+        "category": "Ninja Reviewer",
+        "icon": "$(comment-discussion)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "ninjaReviewer.selectFavorites",
+          "when": "view == ninjaReviewer.prList",
+          "group": "navigation"
+        },
+        {
+          "command": "ninjaReviewer.refresh",
+          "when": "view == ninjaReviewer.prList",
+          "group": "navigation"
+        },
+        {
+          "command": "ninjaReviewer.configure",
+          "when": "view == ninjaReviewer.prList",
+          "group": "navigation"
+        }
+      ],
+      "comments/commentThread/context": [
+        {
+          "command": "ninjaReviewer.replyComment",
+          "group": "inline"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "ninjaReviewer.refreshComments",
+          "when": "resourceScheme == ninja-reviewer",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Ninja Reviewer",
+      "properties": {
+        "ninjaReviewer.organization": {
+          "type": "string",
+          "default": "",
+          "description": "Azure DevOps organization name (e.g., 'myorg' or 'https://dev.azure.com/myorg')"
+        },
+        "ninjaReviewer.project": {
+          "type": "string",
+          "default": "",
+          "description": "Azure DevOps project name"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build": "node esbuild.js",
+    "watch": "node esbuild.js --watch"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.90.0",
+    "esbuild": "^0.21.0",
+    "typescript": "^5.4.0"
+  },
+  "dependencies": {
+    "marked": "^18.0.2"
+  }
+}
