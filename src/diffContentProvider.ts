@@ -17,11 +17,14 @@ export class DiffContentProvider implements vscode.TextDocumentContentProvider {
 
         const params = new URLSearchParams(uri.query);
         const repoId = params.get('repo')!;
-        const commitId = params.get('commit')!;
+        const commitId = params.get('commit');
+        const branch = params.get('branch');
         const filePath = uri.path;
 
         try {
-            const content = await this.client.getFileContent(repoId, filePath, commitId);
+            const content = commitId
+                ? await this.client.getFileContent(repoId, filePath, commitId, 'commit')
+                : await this.client.getFileContent(repoId, filePath, branch ?? 'main', 'branch');
             this.contentCache.set(cacheKey, content);
             return content;
         } catch {

@@ -80,6 +80,11 @@
         "title": "Reload Comments",
         "category": "Ninja Reviewer",
         "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "ninjaReviewer.openFileFromAdo",
+        "title": "Open File From Azure DevOps",
+        "category": "Ninja Reviewer"
       }
     ],
     "menus": {

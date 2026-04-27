@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { PullRequest, ChangeEntry, Iteration, Repository, CommentThread } from './types';
+import { PullRequest, ChangeEntry, Iteration, Repository, CommentThread, CodeSearchResult } from './types';
 
 export class AzureDevOpsClient {
     private _token: string | undefined;
@@ -126,11 +126,16 @@ export class AzureDevOpsClient {
         return data.changeEntries;
     }
 
-    async getFileContent(repoId: string, path: string, commitId: string): Promise<string> {
+    async getFileContent(
+        repoId: string,
+        path: string,
+        version: string,
+        versionType: 'commit' | 'branch' = 'commit'
+    ): Promise<string> {
         const project = this.getProject();
         const token = await this.getToken();
 
-        const url = `${this.getOrgUrl()}/${project}/_apis/git/repositories/${repoId}/items?path=${encodeURIComponent(path)}&versionDescriptor[version]=${commitId}&versionDescriptor[versionType]=commit&api-version=7.1`;
+        const url = `${this.getOrgUrl()}/${project}/_apis/git/repositories/${repoId}/items?path=${encodeURIComponent(path)}&versionDescriptor[version]=${encodeURIComponent(version)}&versionDescriptor[versionType]=${versionType}&api-version=7.1`;
 
         const response = await fetch(url, {
             headers: {
@@ -146,6 +151,64 @@ export class AzureDevOpsClient {
         }
 
         return response.text();
+    }
+
+    /**
+     * Search for code across one or more repositories using the ADO almsearch API.
+     * Requires the "Code Search" extension to be enabled on the organization.
+     */
+    async searchCode(
+        searchText: string,
+        opts: {
+            repositoryName?: string;
+            branch?: string;
+            path?: string;
+            extensions?: string[];
+            codeElements?: string[]; // e.g. ['def', 'ref']
+            top?: number;
+        } = {}
+    ): Promise<CodeSearchResult[]> {
+        const project = this.getProject();
+        const org = this.getOrgUrl()
+            .replace('https://dev.azure.com', 'https://almsearch.dev.azure.com')
+            .replace('.visualstudio.com', '.almsearch.visualstudio.com');
+        const token = await this.getToken();
+
+        const filters: Record<string, string[]> = { Project: [project] };
+        if (opts.repositoryName) { filters.Repository = [opts.repositoryName]; }
+        if (opts.branch) { filters.Branch = [opts.branch]; }
+        if (opts.path) { filters.Path = [opts.path]; }
+        if (opts.extensions && opts.extensions.length > 0) {
+            filters.CodeElement = filters.CodeElement || [];
+            // ADO uses "ext" inside the search text; here we keep filters minimal.
+        }
+        if (opts.codeElements && opts.codeElements.length > 0) {
+            filters.CodeElement = opts.codeElements;
+        }
+
+        const url = `${org}/${project}/_apis/search/codesearchresults?api-version=7.1-preview.1`;
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                searchText,
+                $top: opts.top ?? 50,
+                $skip: 0,
+                filters,
+                includeFacets: false,
+            }),
+        });
+
+        if (!response.ok) {
+            // Code Search extension may not be installed; degrade gracefully.
+            return [];
+        }
+
+        const data = await response.json() as { results?: CodeSearchResult[] };
+        return data.results ?? [];
     }
 
     async getThreads(repoId: string, prId: number): Promise<CommentThread[]> {

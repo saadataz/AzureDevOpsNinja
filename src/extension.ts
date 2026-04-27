@@ -11,7 +11,7 @@ export function activate(context: vscode.ExtensionContext) {
     const client = new AzureDevOpsClient();
     const treeProvider = new PRTreeProvider(client, context.globalState);
     const diffProvider = new DiffContentProvider(client);
-    const hoverProvider = new HoverExplainerProvider();
+    const hoverProvider = new HoverExplainerProvider(client);
     const commentController = new PRCommentController(client);
 
     context.subscriptions.push({ dispose: () => commentController.dispose() });
@@ -94,6 +94,8 @@ export function activate(context: vscode.ExtensionContext) {
             const { pr, change, sourceCommitId, targetCommitId } = args;
             const filePath = change.item.path;
             const repoId = pr.repository.id;
+            const repoName = pr.repository.name;
+            const sourceBranch = pr.sourceRefName.replace('refs/heads/', '');
             const changeType = getChangeTypeString(change.changeType);
 
             // URIs for base (target branch) and head (source branch) versions
@@ -111,6 +113,8 @@ export function activate(context: vscode.ExtensionContext) {
                 filePath,
                 changeType,
                 repoId,
+                repoName,
+                sourceBranch,
                 sourceCommitId,
                 targetCommitId,
             };
@@ -145,6 +149,49 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
         vscode.commands.registerCommand('ninjaReviewer.refreshComments', async () => {
             await commentController.refreshAllComments();
+        })
+    );
+
+    // Open an arbitrary file from ADO at a given branch/line, without cloning.
+    context.subscriptions.push(
+        vscode.commands.registerCommand('ninjaReviewer.openFileFromAdo', async (args: {
+            repoId: string;
+            path: string;
+            branch?: string;
+            line?: number;
+            column?: number;
+        }) => {
+            if (!args || !args.repoId || !args.path) {
+                return;
+            }
+            const branch = args.branch || 'main';
+            const uri = vscode.Uri.parse(
+                `ninja-reviewer:${args.path}?repo=${encodeURIComponent(args.repoId)}&branch=${encodeURIComponent(branch)}`
+            );
+
+            // Build a selection so showTextDocument scrolls to the right place
+            // immediately, instead of opening at line 1 and then scrolling.
+            let selection: vscode.Range | undefined;
+            if (typeof args.line === 'number' && args.line > 0) {
+                const lineIdx = args.line - 1;
+                const colIdx = typeof args.column === 'number' && args.column > 0 ? args.column - 1 : 0;
+                const pos = new vscode.Position(lineIdx, colIdx);
+                selection = new vscode.Range(pos, pos);
+            }
+
+            const editor = await vscode.window.showTextDocument(uri, {
+                preview: true,
+                selection,
+            });
+
+            if (selection) {
+                // Clamp to actual line count once the document is loaded, then
+                // re-reveal in case the editor opened before content was ready.
+                const safeLine = Math.min(selection.start.line, Math.max(0, editor.document.lineCount - 1));
+                const lineRange = editor.document.lineAt(safeLine).range;
+                editor.selection = new vscode.Selection(lineRange.start, lineRange.start);
+                editor.revealRange(lineRange, vscode.TextEditorRevealType.InCenter);
+            }
         })
     );
 

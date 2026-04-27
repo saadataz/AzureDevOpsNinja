@@ -50,6 +50,8 @@ export interface DiffContext {
     filePath: string;
     changeType: string;
     repoId: string;
+    repoName: string;
+    sourceBranch: string;
     sourceCommitId: string;
     targetCommitId: string;
 }
@@ -79,4 +81,23 @@ export interface Comment {
     lastUpdatedDate: string;
     commentType: number;
     isDeleted: boolean;
+}
+
+export interface CodeSearchMatch {
+    charOffset: number;
+    length: number;
+    line?: number;
+    column?: number;
+    type?: string;
+    codeSnippet?: string;
+}
+
+export interface CodeSearchResult {
+    fileName: string;
+    path: string;
+    contentId?: string;
+    repository: { name: string; id: string; type?: string };
+    project: { name: string; id: string };
+    versions?: Array<{ branchName: string; changeId?: string }>;
+    matches?: { content?: CodeSearchMatch[] } & Record<string, CodeSearchMatch[] | undefined>;
 }
