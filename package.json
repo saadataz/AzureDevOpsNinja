@@ -24,6 +24,10 @@
     "build": "node esbuild.js",
     "watch": "node esbuild.js --watch",
     "package": "vsce package -o dist",
+    "publish": "vsce publish && git push --follow-tags",
+    "publish:patch": "vsce publish patch && git push --follow-tags",
+    "publish:minor": "vsce publish minor && git push --follow-tags",
+    "publish:major": "vsce publish major && git push --follow-tags",
     "install:vsix": "code --install-extension dist/azure-devops-ninja-0.1.0.vsix",
     "reload": "npm run build && npm run package && npm run install:vsix"
   },
