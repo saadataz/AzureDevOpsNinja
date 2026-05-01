@@ -1,10 +1,12 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
 import { AzureDevOpsClient } from './azureDevOps';
 import { PRTreeProvider } from './prTreeProvider';
 import { DiffContentProvider } from './diffContentProvider';
 import { HoverExplainerProvider } from './hoverExplainer';
 import { PRCommentController } from './commentController';
 import { PullRequest, ChangeEntry } from './types';
+import { cloneAndReviewPR, consumePendingReviewIfMatch, showDiffForCurrentWorkspace } from './cloneAndReview';
 import { marked } from 'marked';
 
 export function activate(context: vscode.ExtensionContext) {
@@ -16,16 +18,30 @@ export function activate(context: vscode.ExtensionContext) {
 
     context.subscriptions.push({ dispose: () => commentController.dispose() });
 
+    // If this window was opened by a previous "Clone & Review" action,
+    // show the PR diff automatically.
+    void consumePendingReviewIfMatch(context.globalState, treeProvider);
+
     // Register content provider for virtual documents (PR file diffs)
     context.subscriptions.push(
         vscode.workspace.registerTextDocumentContentProvider('ninja-reviewer', diffProvider)
     );
 
     // Register tree view in the sidebar
+    const treeView = vscode.window.createTreeView('ninjaReviewer.prList', {
+        treeDataProvider: treeProvider,
+        showCollapseAll: true,
+    });
+    treeProvider.attachTreeView(treeView);
+    context.subscriptions.push(treeView);
+
+    // Start in the unfocused (PR list) state.
+    vscode.commands.executeCommand('setContext', 'ninjaReviewer.prFocused', false);
+
+    // Back-to-list command (shown as an arrow in the view title when focused).
     context.subscriptions.push(
-        vscode.window.createTreeView('ninjaReviewer.prList', {
-            treeDataProvider: treeProvider,
-            showCollapseAll: true,
+        vscode.commands.registerCommand('ninjaReviewer.backToList', () => {
+            treeProvider.clearFocus();
         })
     );
 
@@ -90,8 +106,9 @@ export function activate(context: vscode.ExtensionContext) {
             change: ChangeEntry;
             sourceCommitId: string;
             targetCommitId: string;
+            goto?: { line: number; side?: 'left' | 'right' };
         }) => {
-            const { pr, change, sourceCommitId, targetCommitId } = args;
+            const { pr, change, sourceCommitId, targetCommitId, goto } = args;
             const filePath = change.item.path;
             const repoId = pr.repository.id;
             const repoName = pr.repository.name;
@@ -136,6 +153,20 @@ export function activate(context: vscode.ExtensionContext) {
 
             // Load existing PR comments into the diff
             await commentController.loadComments(baseUri, headUri, diffContext);
+
+            // Optional: jump the cursor to a specific line (used when opening
+            // from a comment in the sidebar).
+            if (goto && goto.line > 0) {
+                const editor = vscode.window.activeTextEditor;
+                if (editor) {
+                    const lineIdx = Math.max(0, Math.min(goto.line - 1, editor.document.lineCount - 1));
+                    const range = editor.document.lineAt(lineIdx).range;
+                    editor.selection = new vscode.Selection(range.start, range.start);
+                    editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
+                }
+                // Expand the matching comment thread so the user sees it inline.
+                commentController.revealThread(diffContext, goto.line, goto.side ?? 'right');
+            }
         })
     );
 
@@ -149,6 +180,186 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
         vscode.commands.registerCommand('ninjaReviewer.refreshComments', async () => {
             await commentController.refreshAllComments();
+        })
+    );
+
+    // Toggle inline / side-by-side layout for the current diff editor.
+    // Wraps VS Code's built-in workspace setting so users can flip it from
+    // the diff editor's title bar without diving into Settings.
+    context.subscriptions.push(
+        vscode.commands.registerCommand('ninjaReviewer.toggleDiffLayout', async () => {
+            const cfg = vscode.workspace.getConfiguration('diffEditor');
+            const current = cfg.get<boolean>('renderSideBySide', true);
+            await cfg.update(
+                'renderSideBySide',
+                !current,
+                vscode.ConfigurationTarget.Global
+            );
+            vscode.window.setStatusBarMessage(
+                `Diff layout: ${!current ? 'Side-by-side' : 'Inline'}`,
+                2000
+            );
+        })
+    );
+
+    // Open the local working-copy file for the diff currently being viewed.
+    // Works on git: URIs (Clone & Review worktree mode). Strips the git scheme
+    // and reopens the same path as a regular file:// URI for full editing.
+    context.subscriptions.push(
+        vscode.commands.registerCommand('ninjaReviewer.openLocalFile', async (uri?: vscode.Uri) => {
+            const target = uri ?? vscode.window.activeTextEditor?.document.uri;
+            if (!target) {
+                vscode.window.showWarningMessage('Ninja Reviewer: no diff is focused.');
+                return;
+            }
+
+            let fsPath: string | undefined;
+            if (target.scheme === 'file') {
+                fsPath = target.fsPath;
+            } else if (target.scheme === 'git') {
+                // The git: URI from vscode.git encodes the real fs path either
+                // in `uri.fsPath` or in the JSON `query.path` field.
+                fsPath = target.fsPath;
+                try {
+                    const parsed = JSON.parse(target.query);
+                    if (typeof parsed?.path === 'string') {
+                        fsPath = parsed.path;
+                    }
+                } catch {
+                    // Query wasn't JSON; fall back to fsPath.
+                }
+            } else {
+                vscode.window.showWarningMessage(
+                    `Ninja Reviewer: cannot open "${target.scheme}:" diffs locally.`
+                );
+                return;
+            }
+
+            if (!fsPath) {
+                vscode.window.showWarningMessage('Ninja Reviewer: could not resolve a local path.');
+                return;
+            }
+
+            const localUri = vscode.Uri.file(fsPath);
+            await vscode.window.showTextDocument(localUri, { preview: false });
+        })
+    );
+
+    // Used by comment items in the sidebar when running in a Clone & Review
+    // workspace: open the local diff (git: scheme) for the comment's file
+    // and jump to the comment's line.
+    context.subscriptions.push(
+        vscode.commands.registerCommand('ninjaReviewer.openLocalCommentTarget', async (args: {
+            filePath: string; line: number;
+        }) => {
+            const folders = vscode.workspace.workspaceFolders ?? [];
+            if (folders.length === 0) {
+                vscode.window.showWarningMessage('Ninja Reviewer: no folder is open.');
+                return;
+            }
+
+            const lineIdx = Math.max(0, (args.line || 1) - 1);
+
+            // Reuse the diff command already built for the matching file in
+            // the Files section so we get the right git: URIs.
+            const fileCmd = treeProvider.findLocalFileCommand(args.filePath);
+            if (fileCmd && fileCmd.command && fileCmd.arguments) {
+                await vscode.commands.executeCommand(fileCmd.command, ...fileCmd.arguments);
+            } else {
+                // Fallback: open the working-copy file.
+                const root = folders[0].uri.fsPath;
+                const rel = args.filePath.replace(/^\//, '');
+                const fullPath = path.join(root, rel);
+                await vscode.window.showTextDocument(vscode.Uri.file(fullPath), { preview: false });
+            }
+
+            // Move the cursor in whichever editor is now active and reveal it.
+            const editor = vscode.window.activeTextEditor;
+            if (editor) {
+                const safeLine = Math.min(lineIdx, Math.max(0, editor.document.lineCount - 1));
+                const range = editor.document.lineAt(safeLine).range;
+                editor.selection = new vscode.Selection(range.start, range.start);
+                editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
+            }
+        })
+    );
+
+    // Open a diff between two git: URIs (Clone & Review window) AND load
+    // any PR comment threads from ADO so they appear inline.
+    context.subscriptions.push(
+        vscode.commands.registerCommand('ninjaReviewer.openLocalDiff', async (args: {
+            originalUri: vscode.Uri;
+            modifiedUri: vscode.Uri;
+            title: string;
+            repoId: string;
+            prId: number;
+            filePath: string;
+        }) => {
+            // VS Code may serialize URIs as plain objects when passed through
+            // commands. Re-parse defensively.
+            const baseUri = args.originalUri instanceof vscode.Uri
+                ? args.originalUri
+                : vscode.Uri.from(args.originalUri as any);
+            const headUri = args.modifiedUri instanceof vscode.Uri
+                ? args.modifiedUri
+                : vscode.Uri.from(args.modifiedUri as any);
+
+            await vscode.commands.executeCommand('vscode.diff', baseUri, headUri, args.title);
+
+            const sourceBranch = '';
+            const ctx = {
+                prId: args.prId,
+                prTitle: '',
+                filePath: args.filePath,
+                changeType: 'Modified',
+                repoId: args.repoId,
+                repoName: '',
+                sourceBranch,
+                sourceCommitId: '',
+                targetCommitId: '',
+            };
+            commentController.registerDiffContext(baseUri.toString(), ctx);
+            commentController.registerDiffContext(headUri.toString(), ctx);
+            await commentController.loadComments(baseUri, headUri, ctx);
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('ninjaReviewer.cloneAndReview', async (arg: PullRequest | { pr: PullRequest }) => {
+            const pr: PullRequest | undefined =
+                (arg as any)?.pullRequestId !== undefined
+                    ? (arg as PullRequest)
+                    : (arg as { pr: PullRequest })?.pr;
+            if (!pr) {
+                vscode.window.showErrorMessage('Ninja Reviewer: no pull request selected.');
+                return;
+            }
+
+            // The PR endpoint returns a trimmed repository object without
+            // remoteUrl. Resolve it: PR -> full repo lookup -> constructed URL.
+            let remoteUrl = (pr.repository as { remoteUrl?: string }).remoteUrl;
+            if (!remoteUrl) {
+                try {
+                    const fullRepo = await client.getRepository(pr.repository.id);
+                    remoteUrl = fullRepo.remoteUrl;
+                } catch {
+                    // Ignore — fall through to constructed URL.
+                }
+            }
+            if (!remoteUrl) {
+                const org = client.getOrgUrl();
+                const project = encodeURIComponent(client.getProject());
+                const repo = encodeURIComponent(pr.repository.name);
+                remoteUrl = `${org}/${project}/_git/${repo}`;
+            }
+
+            await cloneAndReviewPR(pr, context, remoteUrl);
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('ninjaReviewer.showDiffForCurrentWorkspace', async () => {
+            await showDiffForCurrentWorkspace(treeProvider);
         })
     );
 
@@ -197,6 +408,9 @@ export function activate(context: vscode.ExtensionContext) {
 
     context.subscriptions.push(
         vscode.commands.registerCommand('ninjaReviewer.openPR', (pr: PullRequest) => {
+            // Collapse the sidebar to just this PR's files.
+            treeProvider.focusPR(pr);
+
             const orgUrl = client.getOrgUrl();
             const project = client.getProject();
             const repoName = pr.repository.name;
@@ -222,6 +436,8 @@ export function activate(context: vscode.ExtensionContext) {
                     } catch (err: any) {
                         vscode.window.showErrorMessage(`Vote failed: ${err.message}`);
                     }
+                } else if (msg.type === 'cloneAndReview') {
+                    await vscode.commands.executeCommand('ninjaReviewer.cloneAndReview', pr);
                 }
             });
 
@@ -303,6 +519,7 @@ export function activate(context: vscode.ExtensionContext) {
   </div>
 
   <a class="open-link" href="${adoUrl}">Open in Azure DevOps \u2197</a>
+  <button class="open-link" style="border:none;cursor:pointer;margin-left:8px;" onclick="cloneAndReview()">🥷 Clone &amp; Review Locally</button>
 
   <script>
     const vscode = acquireVsCodeApi();
@@ -311,6 +528,9 @@ export function activate(context: vscode.ExtensionContext) {
       event.target.classList.add('active');
       document.getElementById('voteStatus').textContent = 'Submitting...';
       vscode.postMessage({ type: 'vote', vote });
+    }
+    function cloneAndReview() {
+      vscode.postMessage({ type: 'cloneAndReview' });
     }
     window.addEventListener('message', e => {
       if (e.data.type === 'voteSuccess') {

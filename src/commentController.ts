@@ -15,7 +15,10 @@ export class PRCommentController {
         );
         this.controller.commentingRangeProvider = {
             provideCommentingRanges: (document: vscode.TextDocument) => {
-                if (document.uri.scheme !== 'ninja-reviewer') {
+                // Allow new-comment gutter clicks on our diff scheme; comments
+                // can also be displayed (read-only) on git: URIs from the
+                // built-in Git extension when reviewing a Clone & Review window.
+                if (document.uri.scheme !== 'ninja-reviewer' && document.uri.scheme !== 'git') {
                     return [];
                 }
                 return [new vscode.Range(0, 0, document.lineCount - 1, 0)];
@@ -138,6 +141,37 @@ export class PRCommentController {
         for (const { baseUri, headUri, ctx } of this.openDiffs.values()) {
             await this.loadComments(baseUri, headUri, ctx);
         }
+    }
+
+    /**
+     * Expand the comment thread anchored at (or nearest to) the given line on
+     * the given side, for the supplied diff context. Returns true if a thread
+     * was found and expanded.
+     */
+    revealThread(ctx: DiffContext, line: number, side: 'left' | 'right' = 'right'): boolean {
+        const key = `${ctx.repoId}:${ctx.prId}:${ctx.filePath}`;
+        const open = this.openDiffs.get(key);
+        if (!open) { return false; }
+
+        const targetUri = side === 'left' ? open.baseUri : open.headUri;
+        const candidates = this.threads.get(targetUri.toString()) ?? [];
+        if (candidates.length === 0) { return false; }
+
+        const targetLine = Math.max(0, line - 1); // ADO 1-based -> VS Code 0-based
+        // Pick the thread whose start line is closest to the requested line.
+        let best: vscode.CommentThread | undefined;
+        let bestDelta = Number.POSITIVE_INFINITY;
+        for (const t of candidates) {
+            const delta = Math.abs(t.range.start.line - targetLine);
+            if (delta < bestDelta) {
+                bestDelta = delta;
+                best = t;
+            }
+        }
+        if (!best) { return false; }
+
+        best.collapsibleState = vscode.CommentThreadCollapsibleState.Expanded;
+        return true;
     }
 
     private clearThreads(uriString: string): void {

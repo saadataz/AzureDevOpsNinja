@@ -1,24 +1,51 @@
 {
-  "name": "ninja-reviewer",
-  "displayName": "Ninja Reviewer",
-  "description": "AI-powered Azure DevOps PR reviewer — hover over any line of code to get instant explanations",
+  "name": "azure-devops-ninja",
+  "displayName": "Azure DevOps Ninja",
+  "description": "Azure DevOps tools for the AI native world",
   "version": "0.1.0",
-  "publisher": "ninja-reviewer",
+  "publisher": "SaadatAz",
   "engines": {
     "vscode": "^1.90.0"
   },
   "categories": [
+    "AI",
+    "Azure",
     "Other"
   ],
+  "icon": "resources/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/saadataz/AzureDevOpsNinja"
+  },
+  "license": "MIT",
   "main": "./dist/extension.js",
-  "activationEvents": [],
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "package": "vsce package -o dist",
+    "install:vsix": "code --install-extension dist/azure-devops-ninja-0.1.0.vsix",
+    "reload": "npm run build && npm run package && npm run install:vsix"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.90.0",
+    "esbuild": "^0.21.0",
+    "typescript": "^5.4.0"
+  },
+  "dependencies": {
+    "marked": "^18.0.2"
+  },
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "contributes": {
     "viewsContainers": {
       "activitybar": [
         {
           "id": "ninjaReviewer",
-          "title": "Ninja Reviewer",
-          "icon": "resources/ninja.svg"
+          "title": "Azure DevOps Ninja",
+          "icon": "resources/icon.svg"
         }
       ]
     },
@@ -47,6 +74,12 @@
         "title": "Refresh",
         "category": "Ninja Reviewer",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "ninjaReviewer.backToList",
+        "title": "Back to Pull Requests",
+        "category": "Ninja Reviewer",
+        "icon": "$(arrow-left)"
       },
       {
         "command": "ninjaReviewer.configure",
@@ -82,16 +115,45 @@
         "icon": "$(comment-discussion)"
       },
       {
+        "command": "ninjaReviewer.toggleDiffLayout",
+        "title": "Toggle Inline / Side-by-Side Diff",
+        "category": "Ninja Reviewer",
+        "icon": "$(split-horizontal)"
+      },
+      {
+        "command": "ninjaReviewer.openLocalFile",
+        "title": "Open File Locally",
+        "category": "Ninja Reviewer",
+        "icon": "$(go-to-file)"
+      },
+      {
         "command": "ninjaReviewer.openFileFromAdo",
         "title": "Open File From Azure DevOps",
         "category": "Ninja Reviewer"
+      },
+      {
+        "command": "ninjaReviewer.cloneAndReview",
+        "title": "Clone Source Branch & Review Locally",
+        "category": "Ninja Reviewer",
+        "icon": "$(repo-clone)"
+      },
+      {
+        "command": "ninjaReviewer.showDiffForCurrentWorkspace",
+        "title": "Show PR Diff for Current Workspace",
+        "category": "Ninja Reviewer",
+        "icon": "$(diff-multiple)"
       }
     ],
     "menus": {
       "view/title": [
         {
+          "command": "ninjaReviewer.backToList",
+          "when": "view == ninjaReviewer.prList && ninjaReviewer.prFocused",
+          "group": "navigation@0"
+        },
+        {
           "command": "ninjaReviewer.selectFavorites",
-          "when": "view == ninjaReviewer.prList",
+          "when": "view == ninjaReviewer.prList && !ninjaReviewer.prFocused",
           "group": "navigation"
         },
         {
@@ -101,7 +163,7 @@
         },
         {
           "command": "ninjaReviewer.configure",
-          "when": "view == ninjaReviewer.prList",
+          "when": "view == ninjaReviewer.prList && !ninjaReviewer.prFocused",
           "group": "navigation"
         }
       ],
@@ -113,8 +175,30 @@
       ],
       "editor/title": [
         {
+          "command": "ninjaReviewer.openLocalFile",
+          "when": "resourceScheme == git",
+          "group": "navigation@0"
+        },
+        {
+          "command": "ninjaReviewer.toggleDiffLayout",
+          "when": "resourceScheme == ninja-reviewer || resourceScheme == git",
+          "group": "navigation@1"
+        },
+        {
           "command": "ninjaReviewer.refreshComments",
           "when": "resourceScheme == ninja-reviewer",
+          "group": "navigation@2"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "ninjaReviewer.cloneAndReview",
+          "when": "view == ninjaReviewer.prList && viewItem == pullRequest",
+          "group": "inline"
+        },
+        {
+          "command": "ninjaReviewer.cloneAndReview",
+          "when": "view == ninjaReviewer.prList && viewItem == pullRequest",
           "group": "navigation"
         }
       ]
@@ -131,22 +215,26 @@
           "type": "string",
           "default": "",
           "description": "Azure DevOps project name"
+        },
+        "ninjaReviewer.cloneDirectory": {
+          "type": "string",
+          "default": "",
+          "description": "Default parent folder for fresh clones created by 'Clone & Review'. If empty, you'll be prompted to pick a folder."
+        },
+        "ninjaReviewer.worktreesDirectory": {
+          "type": "string",
+          "default": "",
+          "description": "Folder where PR review worktrees are created. If empty, '<clone>/.ninja-worktrees' is used."
+        },
+        "ninjaReviewer.localClones": {
+          "type": "object",
+          "default": {},
+          "description": "Map of repository ID or name to a local clone path. Used by 'Clone & Review' to create a worktree instead of cloning fresh.",
+          "additionalProperties": {
+            "type": "string"
+          }
         }
       }
     }
-  },
-  "scripts": {
-    "vscode:prepublish": "npm run build",
-    "build": "node esbuild.js",
-    "watch": "node esbuild.js --watch"
-  },
-  "devDependencies": {
-    "@types/node": "^20.0.0",
-    "@types/vscode": "^1.90.0",
-    "esbuild": "^0.21.0",
-    "typescript": "^5.4.0"
-  },
-  "dependencies": {
-    "marked": "^18.0.2"
   }
 }

@@ -7,6 +7,10 @@ export interface Repository {
     id: string;
     name: string;
     project: { id: string; name: string };
+    remoteUrl?: string;
+    sshUrl?: string;
+    webUrl?: string;
+    defaultBranch?: string;
 }
 
 export interface PullRequest {

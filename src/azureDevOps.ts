@@ -79,6 +79,13 @@ export class AzureDevOpsClient {
         return data.value;
     }
 
+    async getRepository(repositoryId: string): Promise<Repository> {
+        const project = this.getProject();
+        return await this.apiFetch<Repository>(
+            `${this.getOrgUrl()}/${project}/_apis/git/repositories/${encodeURIComponent(repositoryId)}?api-version=7.1`
+        );
+    }
+
     async getFavoriteRepositoryIds(): Promise<string[]> {
         const project = this.getProject();
         const data = await this.apiFetch<{ value: Array<{ artifactId: string; artifactType: string }> }>(
