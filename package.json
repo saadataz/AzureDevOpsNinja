@@ -2,7 +2,7 @@
   "name": "azure-devops-ninja",
   "displayName": "Azure DevOps Ninja",
   "description": "Azure DevOps tools for the AI native world",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "SaadatAz",
   "engines": {
     "vscode": "^1.90.0"
