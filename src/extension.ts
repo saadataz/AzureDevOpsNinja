@@ -218,49 +218,6 @@ export function activate(context: vscode.ExtensionContext) {
         })
     );
 
-    // Open the local working-copy file for the diff currently being viewed.
-    // Works on git: URIs (Clone & Review worktree mode). Strips the git scheme
-    // and reopens the same path as a regular file:// URI for full editing.
-    context.subscriptions.push(
-        vscode.commands.registerCommand('ninjaReviewer.openLocalFile', async (uri?: vscode.Uri) => {
-            const target = uri ?? vscode.window.activeTextEditor?.document.uri;
-            if (!target) {
-                vscode.window.showWarningMessage('Ninja Reviewer: no diff is focused.');
-                return;
-            }
-
-            let fsPath: string | undefined;
-            if (target.scheme === 'file') {
-                fsPath = target.fsPath;
-            } else if (target.scheme === 'git') {
-                // The git: URI from vscode.git encodes the real fs path either
-                // in `uri.fsPath` or in the JSON `query.path` field.
-                fsPath = target.fsPath;
-                try {
-                    const parsed = JSON.parse(target.query);
-                    if (typeof parsed?.path === 'string') {
-                        fsPath = parsed.path;
-                    }
-                } catch {
-                    // Query wasn't JSON; fall back to fsPath.
-                }
-            } else {
-                vscode.window.showWarningMessage(
-                    `Ninja Reviewer: cannot open "${target.scheme}:" diffs locally.`
-                );
-                return;
-            }
-
-            if (!fsPath) {
-                vscode.window.showWarningMessage('Ninja Reviewer: could not resolve a local path.');
-                return;
-            }
-
-            const localUri = vscode.Uri.file(fsPath);
-            await vscode.window.showTextDocument(localUri, { preview: false });
-        })
-    );
-
     // Used by comment items in the sidebar when running in a Clone & Review
     // workspace: open the local diff (git: scheme) for the comment's file
     // and jump to the comment's line.

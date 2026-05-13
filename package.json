@@ -136,12 +136,6 @@
         "icon": "$(split-horizontal)"
       },
       {
-        "command": "ninjaReviewer.openLocalFile",
-        "title": "Open File Locally",
-        "category": "Ninja Reviewer",
-        "icon": "$(go-to-file)"
-      },
-      {
         "command": "ninjaReviewer.openFileFromAdo",
         "title": "Open File From Azure DevOps",
         "category": "Ninja Reviewer"
@@ -194,11 +188,6 @@
         }
       ],
       "editor/title": [
-        {
-          "command": "ninjaReviewer.openLocalFile",
-          "when": "resourceScheme == git",
-          "group": "navigation@0"
-        },
         {
           "command": "ninjaReviewer.toggleDiffLayout",
           "when": "resourceScheme == ninja-reviewer || resourceScheme == git",
