@@ -502,12 +502,25 @@ export function activate(context: vscode.ExtensionContext) {
   .description img { max-width: 100%; }
   a { color: var(--vscode-textLink-foreground); }
   a:hover { color: var(--vscode-textLink-activeForeground); }
-  .open-link { display: inline-block; margin-top: 16px; padding: 6px 14px; background: var(--vscode-button-background); color: var(--vscode-button-foreground); text-decoration: none; border-radius: 4px; }
+
+  /* Two-column layout: description on the left, vote column on the right.
+     Collapses to a single column on narrow panels. */
+  .layout { display: flex; gap: 20px; align-items: flex-start; }
+  .main-col { flex: 1 1 auto; min-width: 0; }
+  .side-col { flex: 0 0 220px; position: sticky; top: 20px; }
+  @media (max-width: 720px) {
+    .layout { flex-direction: column; }
+    .side-col { position: static; flex-basis: auto; width: 100%; }
+  }
+
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+  .open-link { display: inline-block; padding: 6px 14px; background: var(--vscode-button-background); color: var(--vscode-button-foreground); text-decoration: none; border-radius: 4px; border: none; cursor: pointer; font-size: 0.9em; font-family: inherit; }
   .open-link:hover { background: var(--vscode-button-hoverBackground); }
-  .vote-section { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--vscode-panel-border); }
-  .vote-section h2 { font-size: 1.1em; margin-bottom: 10px; }
-  .vote-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
-  .vote-btn { padding: 6px 14px; border: 1px solid var(--vscode-panel-border); border-radius: 4px; background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); cursor: pointer; font-size: 0.9em; }
+
+  .vote-section { padding: 12px; border: 1px solid var(--vscode-panel-border); border-radius: 6px; }
+  .vote-section h2 { font-size: 1.1em; margin: 0 0 10px 0; }
+  .vote-buttons { display: flex; flex-direction: column; gap: 8px; }
+  .vote-btn { padding: 6px 14px; border: 1px solid var(--vscode-panel-border); border-radius: 4px; background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); cursor: pointer; font-size: 0.9em; text-align: left; width: 100%; }
   .vote-btn:hover { background: var(--vscode-button-secondaryHoverBackground); }
   .vote-btn.approve { background: #2ea043; color: #fff; border-color: #2ea043; }
   .vote-btn.approve:hover { background: #238636; }
@@ -531,22 +544,30 @@ export function activate(context: vscode.ExtensionContext) {
     <span class="badge branch">${escapeHtml(targetBranch)}</span>
     &middot; ${escapeHtml(repoName)}
   </div>
-  <div class="description">${description}</div>
 
-  <div class="vote-section">
-    <h2>Vote</h2>
-    <div class="vote-buttons">
-      <button class="vote-btn approve" onclick="submitVote(10)">✅ Approve</button>
-      <button class="vote-btn approve-suggestions" onclick="submitVote(5)">👍 Approve with Suggestions</button>
-      <button class="vote-btn wait" onclick="submitVote(-5)">⏳ Wait for Author</button>
-      <button class="vote-btn reject" onclick="submitVote(-10)">❌ Reject</button>
-      <button class="vote-btn reset" onclick="submitVote(0)">↩ Reset Vote</button>
+  <div class="layout">
+    <div class="main-col">
+      <div class="actions">
+        <a class="open-link" href="${adoUrl}">Open in Azure DevOps \u2197</a>
+        <button class="open-link" onclick="cloneAndReview()">🥷 Clone &amp; Review Locally</button>
+      </div>
+      <div class="description">${description}</div>
     </div>
-    <div class="vote-status" id="voteStatus"></div>
-  </div>
 
-  <a class="open-link" href="${adoUrl}">Open in Azure DevOps \u2197</a>
-  <button class="open-link" style="border:none;cursor:pointer;margin-left:8px;" onclick="cloneAndReview()">🥷 Clone &amp; Review Locally</button>
+    <div class="side-col">
+      <div class="vote-section">
+        <h2>Vote</h2>
+        <div class="vote-buttons">
+          <button class="vote-btn approve" onclick="submitVote(10)">✅ Approve</button>
+          <button class="vote-btn approve-suggestions" onclick="submitVote(5)">👍 Approve with Suggestions</button>
+          <button class="vote-btn wait" onclick="submitVote(-5)">⏳ Wait for Author</button>
+          <button class="vote-btn reject" onclick="submitVote(-10)">❌ Reject</button>
+          <button class="vote-btn reset" onclick="submitVote(0)">↩ Reset Vote</button>
+        </div>
+        <div class="vote-status" id="voteStatus"></div>
+      </div>
+    </div>
+  </div>
 
   <script>
     const vscode = acquireVsCodeApi();
