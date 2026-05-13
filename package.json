@@ -151,6 +151,12 @@
         "title": "Show PR Diff for Current Workspace",
         "category": "Ninja Reviewer",
         "icon": "$(diff-multiple)"
+      },
+      {
+        "command": "ninjaReviewer.generateWalkthrough",
+        "title": "Generate AI Walkthrough",
+        "category": "Ninja Reviewer",
+        "icon": "$(sparkle)"
       }
     ],
     "menus": {

@@ -7,6 +7,7 @@ import { HoverExplainerProvider } from './hoverExplainer';
 import { PRCommentController } from './commentController';
 import { PullRequest, ChangeEntry } from './types';
 import { cloneAndReviewPR, consumePendingReviewIfMatch, showDiffForCurrentWorkspace } from './cloneAndReview';
+import { generateWalkthrough, WalkthroughResult } from './walkthrough';
 import { marked } from 'marked';
 
 export function activate(context: vscode.ExtensionContext) {
@@ -422,6 +423,8 @@ export function activate(context: vscode.ExtensionContext) {
                     }
                 } else if (msg.type === 'cloneAndReview') {
                     await vscode.commands.executeCommand('ninjaReviewer.cloneAndReview', pr);
+                } else if (msg.type === 'generateWalkthrough') {
+                    await vscode.commands.executeCommand('ninjaReviewer.generateWalkthrough', pr);
                 }
             });
 
@@ -507,6 +510,7 @@ export function activate(context: vscode.ExtensionContext) {
       <div class="actions">
         <a class="open-link" href="${adoUrl}">Open in Azure DevOps \u2197</a>
         <button class="open-link" onclick="cloneAndReview()">🥷 Clone &amp; Review Locally</button>
+        <button class="open-link" onclick="generateWalkthrough()">🤖 Generate AI Walkthrough</button>
       </div>
       <div class="description">${description}</div>
     </div>
@@ -537,6 +541,9 @@ export function activate(context: vscode.ExtensionContext) {
     function cloneAndReview() {
       vscode.postMessage({ type: 'cloneAndReview' });
     }
+    function generateWalkthrough() {
+      vscode.postMessage({ type: 'generateWalkthrough' });
+    }
     window.addEventListener('message', e => {
       if (e.data.type === 'voteSuccess') {
         const labels = { 10: '✅ Approved', 5: '👍 Approved with Suggestions', 0: '↩ Vote Reset', '-5': '⏳ Waiting for Author', '-10': '❌ Rejected' };
@@ -548,6 +555,170 @@ export function activate(context: vscode.ExtensionContext) {
 </html>`;
         })
     );
+
+    // Generate an AI walkthrough of the PR's code changes and show it in a
+    // new webview, with clickable file rows that open the existing diff view.
+    context.subscriptions.push(
+        vscode.commands.registerCommand('ninjaReviewer.generateWalkthrough', async (pr: PullRequest) => {
+            if (!pr) {
+                vscode.window.showErrorMessage('Ninja Reviewer: no pull request selected.');
+                return;
+            }
+
+            let result: WalkthroughResult;
+            try {
+                result = await vscode.window.withProgress(
+                    {
+                        location: vscode.ProgressLocation.Notification,
+                        title: `Generating walkthrough for PR #${pr.pullRequestId}…`,
+                        cancellable: true,
+                    },
+                    (progress, token) => generateWalkthrough(client, pr, token, progress),
+                );
+            } catch (err: any) {
+                if (err instanceof vscode.CancellationError) { return; }
+                vscode.window.showErrorMessage(`Walkthrough failed: ${err?.message ?? err}`);
+                return;
+            }
+
+            const walkPanel = vscode.window.createWebviewPanel(
+                'ninjaReviewer.prWalkthrough',
+                `Walkthrough: PR #${pr.pullRequestId}`,
+                vscode.ViewColumn.One,
+                { enableScripts: true },
+            );
+
+            walkPanel.webview.onDidReceiveMessage(async (msg) => {
+                if (msg?.type === 'openFile' && typeof msg.path === 'string') {
+                    const change = result.files.find(f => f.path === msg.path)?.change;
+                    if (!change) {
+                        vscode.window.showWarningMessage(
+                            `Ninja Reviewer: file "${msg.path}" was not part of the indexed changes.`
+                        );
+                        return;
+                    }
+                    await vscode.commands.executeCommand('ninjaReviewer.openDiff', {
+                        pr,
+                        change,
+                        sourceCommitId: result.iteration.sourceRefCommit.commitId,
+                        targetCommitId: result.iteration.targetRefCommit.commitId,
+                    });
+                }
+            });
+
+            walkPanel.webview.html = renderWalkthroughHtml(pr, result);
+        })
+    );
+}
+
+/** Build the HTML for the walkthrough webview. */
+function renderWalkthroughHtml(pr: PullRequest, result: WalkthroughResult): string {
+    const summaryHtml = marked.parse(result.summary || '_No summary returned._');
+    const fileToChange = new Map(result.files.map(f => [f.path, f]));
+
+    const renderFileChip = (filePath: string): string => {
+        const known = fileToChange.has(filePath);
+        const display = filePath.replace(/^\//, '');
+        const safe = escapeHtml(filePath);
+        const label = escapeHtml(display);
+        if (!known) {
+            return `<span class="file-chip unknown" title="Not in PR change set">${label}</span>`;
+        }
+        return `<button class="file-chip" data-path="${safe}" onclick="openFile(this.dataset.path)">${label}</button>`;
+    };
+
+    const keyChangesHtml = result.keyChanges.length === 0
+        ? '<p><em>The model did not return any grouped changes.</em></p>'
+        : result.keyChanges.map((kc, idx) => {
+            const descHtml = marked.parse(kc.description || '');
+            const fileList = kc.files.length === 0
+                ? ''
+                : `<div class="file-row">${kc.files.map(renderFileChip).join('')}</div>`;
+            return `
+              <section class="key-change">
+                <h3>${idx + 1}. ${escapeHtml(kc.title)}</h3>
+                <div class="kc-desc">${descHtml}</div>
+                ${fileList}
+              </section>
+            `;
+        }).join('\n');
+
+    // List of all files that were considered, in case the user wants to
+    // jump to one the AI did not surface explicitly.
+    const allFilesHtml = result.files.map(f => {
+        const display = f.path.replace(/^\//, '');
+        const status = changeTypeString(f.changeType);
+        const reason = f.skippedReason ? ` <span class="skipped">(${escapeHtml(f.skippedReason)})</span>` : '';
+        return `
+          <li>
+            <button class="file-chip" data-path="${escapeHtml(f.path)}" onclick="openFile(this.dataset.path)">${escapeHtml(display)}</button>
+            <span class="status">${status}</span>${reason}
+          </li>
+        `;
+    }).join('');
+
+    const truncatedNote = result.truncated
+        ? '<p class="note">Note: only a subset of files was sent to the model to fit its context window.</p>'
+        : '';
+
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
+<style>
+  body { font-family: var(--vscode-font-family, sans-serif); padding: 20px; color: var(--vscode-foreground); background: var(--vscode-editor-background); line-height: 1.6; overflow-wrap: anywhere; }
+  h1 { font-size: 1.4em; margin-bottom: 4px; }
+  .meta { color: var(--vscode-descriptionForeground); font-size: 0.9em; margin-bottom: 16px; }
+  h2 { font-size: 1.15em; margin-top: 24px; border-bottom: 1px solid var(--vscode-panel-border); padding-bottom: 4px; }
+  .summary { padding: 12px; border: 1px solid var(--vscode-panel-border); border-radius: 6px; background: var(--vscode-textBlockQuote-background); }
+  .key-change { padding: 12px 14px; border: 1px solid var(--vscode-panel-border); border-radius: 6px; margin: 12px 0; }
+  .key-change h3 { margin: 0 0 6px 0; font-size: 1.05em; }
+  .kc-desc p { margin: 6px 0; }
+  .file-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .file-chip { display: inline-flex; align-items: center; padding: 3px 8px; border-radius: 12px; border: 1px solid var(--vscode-panel-border); background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); font-family: var(--vscode-editor-font-family, monospace); font-size: 0.85em; cursor: pointer; }
+  .file-chip:hover { background: var(--vscode-button-secondaryHoverBackground); }
+  .file-chip.unknown { cursor: default; opacity: 0.7; }
+  ul.files { list-style: none; padding: 0; margin: 8px 0; }
+  ul.files li { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+  .status { color: var(--vscode-descriptionForeground); font-size: 0.85em; }
+  .skipped { color: var(--vscode-errorForeground); font-size: 0.8em; }
+  .note { color: var(--vscode-descriptionForeground); font-style: italic; font-size: 0.9em; }
+  code { font-family: var(--vscode-editor-font-family, monospace); background: var(--vscode-textCodeBlock-background); padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
+</style>
+</head>
+<body>
+  <h1>Walkthrough — PR #${pr.pullRequestId}</h1>
+  <div class="meta">
+    ${escapeHtml(pr.title)} · generated by <code>${escapeHtml(result.modelLabel)}</code>
+  </div>
+  ${truncatedNote}
+
+  <h2>Summary</h2>
+  <div class="summary">${summaryHtml}</div>
+
+  <h2>Key Changes</h2>
+  ${keyChangesHtml}
+
+  <h2>All Changed Files (${result.files.length})</h2>
+  <ul class="files">${allFilesHtml}</ul>
+
+  <script>
+    const vscode = acquireVsCodeApi();
+    function openFile(path) {
+      vscode.postMessage({ type: 'openFile', path });
+    }
+  </script>
+</body>
+</html>`;
+}
+
+function changeTypeString(changeType: number): string {
+    if (changeType & 1 && !(changeType & 2)) { return 'Added'; }
+    if (changeType & 16) { return 'Deleted'; }
+    if (changeType & 8) { return 'Renamed'; }
+    if (changeType & 2) { return 'Modified'; }
+    return 'Changed';
 }
 
 function escapeHtml(text: string): string {
