@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { AzureDevOpsClient } from './azureDevOps';
-import { PRTreeProvider } from './prTreeProvider';
+import { PRTreeProvider, AssignedPRTreeProvider } from './prTreeProvider';
 import { DiffContentProvider } from './diffContentProvider';
 import { HoverExplainerProvider } from './hoverExplainer';
 import { PRCommentController } from './commentController';
@@ -12,6 +12,7 @@ import { marked } from 'marked';
 export function activate(context: vscode.ExtensionContext) {
     const client = new AzureDevOpsClient();
     const treeProvider = new PRTreeProvider(client, context.globalState);
+    const assignedProvider = new AssignedPRTreeProvider(client);
     const diffProvider = new DiffContentProvider(client);
     const hoverProvider = new HoverExplainerProvider(client);
     const commentController = new PRCommentController(client);
@@ -35,6 +36,12 @@ export function activate(context: vscode.ExtensionContext) {
     treeProvider.attachTreeView(treeView);
     context.subscriptions.push(treeView);
 
+    // Separate "Assigned to Me" accordion in the same activity-bar container.
+    const assignedView = vscode.window.createTreeView('ninjaReviewer.assignedToMe', {
+        treeDataProvider: assignedProvider,
+    });
+    context.subscriptions.push(assignedView);
+
     // Start in the unfocused (PR list) state.
     vscode.commands.executeCommand('setContext', 'ninjaReviewer.prFocused', false);
 
@@ -56,6 +63,7 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand('ninjaReviewer.signIn', async () => {
             await client.signIn();
             treeProvider.refresh();
+            assignedProvider.refresh();
         })
     );
 
@@ -64,7 +72,14 @@ export function activate(context: vscode.ExtensionContext) {
             diffProvider.clearCache();
             hoverProvider.clearCache();
             treeProvider.refresh();
+            assignedProvider.refresh();
             await commentController.refreshAllComments();
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('ninjaReviewer.refreshAssigned', () => {
+            assignedProvider.refresh();
         })
     );
 
@@ -97,6 +112,7 @@ export function activate(context: vscode.ExtensionContext) {
 
             vscode.window.showInformationMessage(`Ninja Reviewer configured for ${org}/${project}`);
             treeProvider.refresh();
+            assignedProvider.refresh();
         })
     );
 
@@ -408,8 +424,9 @@ export function activate(context: vscode.ExtensionContext) {
 
     context.subscriptions.push(
         vscode.commands.registerCommand('ninjaReviewer.openPR', (pr: PullRequest) => {
-            // Collapse the sidebar to just this PR's files.
-            treeProvider.focusPR(pr);
+            // The PR row in the sidebar is already expandable to show its
+            // changed files inline, so we don't reshape the tree here — just
+            // open the PR description webview.
 
             const orgUrl = client.getOrgUrl();
             const project = client.getProject();

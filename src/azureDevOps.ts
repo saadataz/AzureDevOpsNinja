@@ -117,6 +117,18 @@ export class AzureDevOpsClient {
         return results.flat();
     }
 
+    /**
+     * List active pull requests where the current user is a reviewer
+     * (i.e. assigned to me) across the whole project.
+     */
+    async listPullRequestsAssignedToMe(): Promise<PullRequest[]> {
+        const project = this.getProject();
+        const userId = await this.getCurrentUserId();
+        const url = `${this.getOrgUrl()}/${project}/_apis/git/pullrequests?searchCriteria.status=active&searchCriteria.reviewerId=${encodeURIComponent(userId)}&api-version=7.1`;
+        const data = await this.apiFetch<{ value: PullRequest[] }>(url);
+        return data.value;
+    }
+
     async getPullRequestIterations(repoId: string, prId: number): Promise<Iteration[]> {
         const project = this.getProject();
         const data = await this.apiFetch<{ value: Iteration[] }>(

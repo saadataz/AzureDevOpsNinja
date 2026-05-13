@@ -56,6 +56,10 @@
     "views": {
       "ninjaReviewer": [
         {
+          "id": "ninjaReviewer.assignedToMe",
+          "name": "Assigned to Me"
+        },
+        {
           "id": "ninjaReviewer.prList",
           "name": "Pull Requests"
         }
@@ -76,6 +80,12 @@
       {
         "command": "ninjaReviewer.refresh",
         "title": "Refresh",
+        "category": "Ninja Reviewer",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "ninjaReviewer.refreshAssigned",
+        "title": "Refresh Assigned to Me",
         "category": "Ninja Reviewer",
         "icon": "$(refresh)"
       },
@@ -168,6 +178,11 @@
         {
           "command": "ninjaReviewer.configure",
           "when": "view == ninjaReviewer.prList && !ninjaReviewer.prFocused",
+          "group": "navigation"
+        },
+        {
+          "command": "ninjaReviewer.refreshAssigned",
+          "when": "view == ninjaReviewer.assignedToMe",
           "group": "navigation"
         }
       ],

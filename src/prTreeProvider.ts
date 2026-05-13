@@ -14,7 +14,6 @@ export class PRTreeProvider implements vscode.TreeDataProvider<PRTreeItem> {
     private threadsCache = new Map<number, CommentThread[]>();
     private selectedRepoIds: string[] = [];
     private allRepos: Repository[] = [];
-    private focusedPR: PullRequest | undefined;
     /** When set, the tree shows pre-built items (used for local-worktree PR reviews). */
     private localChanges: {
         title: string;
@@ -37,20 +36,8 @@ export class PRTreeProvider implements vscode.TreeDataProvider<PRTreeItem> {
         this.treeView = view;
     }
 
-    /** Switch the sidebar to show ONLY the changed files for one PR. */
-    focusPR(pr: PullRequest): void {
-        this.focusedPR = pr;
-        vscode.commands.executeCommand('setContext', 'ninjaReviewer.prFocused', true);
-        if (this.treeView) {
-            this.treeView.title = `PR #${pr.pullRequestId}`;
-            this.treeView.description = pr.title;
-        }
-        this._onDidChangeTreeData.fire(undefined);
-    }
-
-    /** Return to the repos / PR list view. */
+    /** Return to the repos / PR list view (exits Clone & Review local-changes mode). */
     clearFocus(): void {
-        this.focusedPR = undefined;
         this.localChanges = undefined;
         vscode.commands.executeCommand('setContext', 'ninjaReviewer.prFocused', false);
         if (this.treeView) {
@@ -73,7 +60,6 @@ export class PRTreeProvider implements vscode.TreeDataProvider<PRTreeItem> {
         adoPR?: { repoId: string; prId: number; pseudoPR: PullRequest },
     ): void {
         this.localChanges = { title, subtitle, items, adoPR };
-        this.focusedPR = undefined;
         // Drop any cached threads so the Comments section refetches.
         if (adoPR) {
             this.threadsCache.delete(adoPR.prId);
@@ -121,12 +107,6 @@ export class PRTreeProvider implements vscode.TreeDataProvider<PRTreeItem> {
             // Local-worktree mode: show the precomputed file list (flat).
             if (this.localChanges) {
                 return this.localChanges.items;
-            }
-            // Focused mode: show the changed files for the selected PR (flat).
-            // Comments live in the built-in Comments panel — users can drag
-            // it into this sidebar via right-click → Move View.
-            if (this.focusedPR) {
-                return this.getChangedFiles(this.focusedPR, /*flat*/ true);
             }
             return this.getRepositories();
         }
@@ -312,83 +292,14 @@ export class PRTreeProvider implements vscode.TreeDataProvider<PRTreeItem> {
                 return [new PRTreeItem('No active pull requests', 'message')];
             }
 
-            return pullRequests.map(pr => {
-                const item = new PRTreeItem(
-                    pr.title,
-                    'pr',
-                    vscode.TreeItemCollapsibleState.Collapsed
-                );
-                item.pr = pr;
-                item.description = pr.createdBy.displayName;
-                item.tooltip = new vscode.MarkdownString(
-                    `**${pr.title}**\n\n` +
-                    `${pr.description || 'No description'}\n\n` +
-                    `By: ${pr.createdBy.displayName}\n\n` +
-                    `\`${pr.sourceRefName.replace('refs/heads/', '')}\` → \`${pr.targetRefName.replace('refs/heads/', '')}\``
-                );
-                item.command = {
-                    command: 'ninjaReviewer.openPR',
-                    title: 'Open PR Description',
-                    arguments: [pr],
-                };
-                return item;
-            });
+            return pullRequests.map(pr => buildPRItem(pr));
         } catch (err: any) {
             return [new PRTreeItem(`Error: ${err.message}`, 'message')];
         }
     }
 
-    private async getChangedFiles(pr: PullRequest, _flat = false): Promise<PRTreeItem[]> {
-        try {
-            let cached = this.changesCache.get(pr.pullRequestId);
-
-            if (!cached) {
-                const iterations = await this.client.getPullRequestIterations(
-                    pr.repository.id, pr.pullRequestId
-                );
-                const lastIteration = iterations[iterations.length - 1];
-                const changes = await this.client.getPullRequestChanges(
-                    pr.repository.id, pr.pullRequestId, lastIteration.id
-                );
-                cached = { changes, iteration: lastIteration };
-                this.changesCache.set(pr.pullRequestId, cached);
-            }
-
-            const { changes, iteration } = cached;
-
-            const filtered = changes.filter(c => c.item.path && c.item.path !== '/');
-            if (filtered.length === 0) {
-                return [new PRTreeItem('No file changes in this PR', 'message')];
-            }
-
-            return filtered.map(change => {
-                const fullPath = change.item.path.replace(/^\//, '');
-                const fileName = fullPath.split('/').pop() || fullPath;
-                const dirName = fullPath.includes('/')
-                    ? fullPath.substring(0, fullPath.lastIndexOf('/'))
-                    : '';
-                const changeLabel = getChangeTypeLabel(change.changeType);
-
-                const item = new PRTreeItem(fileName, 'file');
-                // Source-Control-style: dimmed parent dir on the right.
-                item.description = dirName || changeLabel;
-                item.tooltip = `${changeLabel}: ${fullPath}`;
-                item.iconPath = getChangeTypeIcon(change.changeType);
-                item.command = {
-                    command: 'ninjaReviewer.openDiff',
-                    title: 'Open Diff',
-                    arguments: [{
-                        pr,
-                        change,
-                        sourceCommitId: iteration.sourceRefCommit.commitId,
-                        targetCommitId: iteration.targetRefCommit.commitId,
-                    }],
-                };
-                return item;
-            });
-        } catch (err: any) {
-            return [new PRTreeItem(`Error: ${err.message}`, 'message')];
-        }
+    private async getChangedFiles(pr: PullRequest): Promise<PRTreeItem[]> {
+        return loadChangedFileItems(this.client, this.changesCache, pr);
     }
 
     async selectFavorites(): Promise<void> {
@@ -452,6 +363,145 @@ export class PRTreeItem extends vscode.TreeItem {
         } else {
             this.contextValue = 'changedFile';
         }
+    }
+}
+
+/**
+ * Tree provider for the "Assigned to Me" accordion. Shows active PRs across
+ * the whole project where the current user is a reviewer. Each PR row is
+ * expandable to reveal its changed files.
+ */
+export class AssignedPRTreeProvider implements vscode.TreeDataProvider<PRTreeItem> {
+    private _onDidChangeTreeData = new vscode.EventEmitter<PRTreeItem | undefined>();
+    readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
+
+    private changesCache = new Map<number, { changes: ChangeEntry[]; iteration: Iteration }>();
+
+    constructor(private client: AzureDevOpsClient) {}
+
+    refresh(): void {
+        this.changesCache.clear();
+        this._onDidChangeTreeData.fire(undefined);
+    }
+
+    getTreeItem(element: PRTreeItem): vscode.TreeItem {
+        return element;
+    }
+
+    async getChildren(element?: PRTreeItem): Promise<PRTreeItem[]> {
+        if (element) {
+            // Expand a PR row to show its changed files.
+            if (element.type === 'pr' && element.pr) {
+                return loadChangedFileItems(this.client, this.changesCache, element.pr);
+            }
+            return [];
+        }
+
+        const config = vscode.workspace.getConfiguration('ninjaReviewer');
+        const org = config.get<string>('organization', '');
+        const project = config.get<string>('project', '');
+        if (!org || !project) {
+            return [];
+        }
+
+        try {
+            const pullRequests = await this.client.listPullRequestsAssignedToMe();
+            if (pullRequests.length === 0) {
+                return [new PRTreeItem('No pull requests assigned to you', 'message')];
+            }
+            // Show repo name in the description since these PRs span repos.
+            return pullRequests.map(pr => buildPRItem(pr, /*includeRepo*/ true));
+        } catch (err: any) {
+            return [new PRTreeItem(`Error: ${err.message}`, 'message')];
+        }
+    }
+}
+
+function buildPRItem(pr: PullRequest, includeRepo = false, collapsible = true): PRTreeItem {
+    const item = new PRTreeItem(
+        pr.title,
+        'pr',
+        collapsible
+            ? vscode.TreeItemCollapsibleState.Collapsed
+            : vscode.TreeItemCollapsibleState.None,
+    );
+    item.pr = pr;
+    item.description = includeRepo
+        ? `${pr.repository.name} · ${pr.createdBy.displayName}`
+        : pr.createdBy.displayName;
+    item.tooltip = new vscode.MarkdownString(
+        `**${pr.title}**\n\n` +
+        `${pr.description || 'No description'}\n\n` +
+        `Repo: ${pr.repository.name}\n\n` +
+        `By: ${pr.createdBy.displayName}\n\n` +
+        `\`${pr.sourceRefName.replace('refs/heads/', '')}\` → \`${pr.targetRefName.replace('refs/heads/', '')}\``
+    );
+    item.command = {
+        command: 'ninjaReviewer.openPR',
+        title: 'Open PR Description',
+        arguments: [pr],
+    };
+    return item;
+}
+
+/**
+ * Shared loader for the "changed files" rows under a PR. Used by both the
+ * per-repo PR list and the "Assigned to Me" view, with each provider
+ * supplying its own cache.
+ */
+async function loadChangedFileItems(
+    client: AzureDevOpsClient,
+    cache: Map<number, { changes: ChangeEntry[]; iteration: Iteration }>,
+    pr: PullRequest,
+): Promise<PRTreeItem[]> {
+    try {
+        let cached = cache.get(pr.pullRequestId);
+
+        if (!cached) {
+            const iterations = await client.getPullRequestIterations(
+                pr.repository.id, pr.pullRequestId
+            );
+            const lastIteration = iterations[iterations.length - 1];
+            const changes = await client.getPullRequestChanges(
+                pr.repository.id, pr.pullRequestId, lastIteration.id
+            );
+            cached = { changes, iteration: lastIteration };
+            cache.set(pr.pullRequestId, cached);
+        }
+
+        const { changes, iteration } = cached;
+        const filtered = changes.filter(c => c.item.path && c.item.path !== '/');
+        if (filtered.length === 0) {
+            return [new PRTreeItem('No file changes in this PR', 'message')];
+        }
+
+        return filtered.map(change => {
+            const fullPath = change.item.path.replace(/^\//, '');
+            const fileName = fullPath.split('/').pop() || fullPath;
+            const dirName = fullPath.includes('/')
+                ? fullPath.substring(0, fullPath.lastIndexOf('/'))
+                : '';
+            const changeLabel = getChangeTypeLabel(change.changeType);
+
+            const item = new PRTreeItem(fileName, 'file');
+            // Source-Control-style: dimmed parent dir on the right.
+            item.description = dirName || changeLabel;
+            item.tooltip = `${changeLabel}: ${fullPath}`;
+            item.iconPath = getChangeTypeIcon(change.changeType);
+            item.command = {
+                command: 'ninjaReviewer.openDiff',
+                title: 'Open Diff',
+                arguments: [{
+                    pr,
+                    change,
+                    sourceCommitId: iteration.sourceRefCommit.commitId,
+                    targetCommitId: iteration.targetRefCommit.commitId,
+                }],
+            };
+            return item;
+        });
+    } catch (err: any) {
+        return [new PRTreeItem(`Error: ${err.message}`, 'message')];
     }
 }
 
