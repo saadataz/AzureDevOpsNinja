@@ -37,7 +37,8 @@ interface LocalCloneMap {
 export async function cloneAndReviewPR(
     pr: PullRequest,
     context: vscode.ExtensionContext,
-    remoteUrl: string | undefined
+    remoteUrl: string | undefined,
+    treeProvider: PRTreeProvider,
 ): Promise<void> {
     const globalState = context.globalState;
     const sourceBranch = pr.sourceRefName.replace('refs/heads/', '');
@@ -113,7 +114,7 @@ export async function cloneAndReviewPR(
                 // Drop the pending entry and just open the diff here.
                 await dropPendingReview(globalState, pending.folderPath);
                 try {
-                    await openPRDiffInWorktree(pending);
+                    await openPRDiffInWorktree(pending, treeProvider);
                 } catch (err: any) {
                     vscode.window.showErrorMessage(`Ninja Reviewer: ${err.message}`);
                 }

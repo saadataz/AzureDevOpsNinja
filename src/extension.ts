@@ -369,7 +369,7 @@ export function activate(context: vscode.ExtensionContext) {
                 remoteUrl = `${org}/${project}/_git/${repo}`;
             }
 
-            await cloneAndReviewPR(pr, context, remoteUrl);
+            await cloneAndReviewPR(pr, context, remoteUrl, treeProvider);
         })
     );
 

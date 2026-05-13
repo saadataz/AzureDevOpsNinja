@@ -117,6 +117,10 @@ export class PRCommentController {
                 await this.client.replyToThread(ctx.repoId, ctx.prId, adoThreadId, reply.text);
             } else {
                 // New thread
+                if (!thread.range) {
+                    vscode.window.showErrorMessage('Cannot post comment: thread has no anchor range.');
+                    return;
+                }
                 const line = thread.range.start.line + 1; // VS Code 0-based → ADO 1-based
                 const newThread = await this.client.createThread(
                     ctx.repoId, ctx.prId, ctx.filePath, line, reply.text
@@ -162,6 +166,7 @@ export class PRCommentController {
         let best: vscode.CommentThread | undefined;
         let bestDelta = Number.POSITIVE_INFINITY;
         for (const t of candidates) {
+            if (!t.range) { continue; }
             const delta = Math.abs(t.range.start.line - targetLine);
             if (delta < bestDelta) {
                 bestDelta = delta;

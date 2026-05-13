@@ -21,7 +21,8 @@
   "main": "./dist/extension.js",
   "scripts": {
     "vscode:prepublish": "npm run build",
-    "build": "node esbuild.js",
+    "typecheck": "tsc --noEmit",
+    "build": "npm run typecheck && node esbuild.js",
     "watch": "node esbuild.js --watch",
     "package": "vsce package -o dist",
     "publish": "vsce publish && git push --follow-tags",
