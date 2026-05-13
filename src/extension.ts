@@ -423,10 +423,20 @@ export function activate(context: vscode.ExtensionContext) {
     );
 
     context.subscriptions.push(
-        vscode.commands.registerCommand('ninjaReviewer.openPR', (pr: PullRequest) => {
+        vscode.commands.registerCommand('ninjaReviewer.openPR', async (prArg: PullRequest) => {
             // The PR row in the sidebar is already expandable to show its
             // changed files inline, so we don't reshape the tree here — just
             // open the PR description webview.
+
+            // The PR objects from the list endpoints carry a TRUNCATED
+            // description (~400 chars). Fetch the full PR by id so the
+            // webview shows the complete body.
+            let pr = prArg;
+            try {
+                pr = await client.getPullRequest(prArg.repository.id, prArg.pullRequestId);
+            } catch {
+                // Fall back to the list-supplied object if the detail fetch fails.
+            }
 
             const orgUrl = client.getOrgUrl();
             const project = client.getProject();
@@ -473,19 +483,19 @@ export function activate(context: vscode.ExtensionContext) {
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
 <style>
-  body { font-family: var(--vscode-font-family, sans-serif); padding: 20px; color: var(--vscode-foreground); background: var(--vscode-editor-background); line-height: 1.6; }
-  h1 { font-size: 1.4em; margin-bottom: 4px; }
+  body { font-family: var(--vscode-font-family, sans-serif); padding: 20px; color: var(--vscode-foreground); background: var(--vscode-editor-background); line-height: 1.6; overflow-wrap: anywhere; word-break: break-word; }
+  h1 { font-size: 1.4em; margin-bottom: 4px; overflow-wrap: anywhere; }
   .meta { color: var(--vscode-descriptionForeground); font-size: 0.9em; margin-bottom: 16px; }
   .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.85em; font-weight: 500; }
   .branch { background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); font-family: var(--vscode-editor-font-family, monospace); }
   .arrow { margin: 0 6px; }
-  .description { margin: 16px 0; padding: 12px; border: 1px solid var(--vscode-panel-border); border-radius: 6px; }
+  .description { margin: 16px 0; padding: 12px; border: 1px solid var(--vscode-panel-border); border-radius: 6px; overflow-wrap: anywhere; }
   .description h1, .description h2, .description h3 { margin-top: 12px; margin-bottom: 4px; }
   .description p { margin: 6px 0; }
   .description ul, .description ol { padding-left: 24px; }
   .description code { font-family: var(--vscode-editor-font-family, monospace); background: var(--vscode-textCodeBlock-background); padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
-  .description pre { background: var(--vscode-textCodeBlock-background); padding: 10px; border-radius: 4px; overflow-x: auto; }
-  .description pre code { padding: 0; background: none; }
+  .description pre { background: var(--vscode-textCodeBlock-background); padding: 10px; border-radius: 4px; overflow-x: auto; white-space: pre; word-break: normal; overflow-wrap: normal; }
+  .description pre code { padding: 0; background: none; white-space: pre; }
   .description blockquote { border-left: 3px solid var(--vscode-textBlockQuote-border); margin: 8px 0; padding: 4px 12px; color: var(--vscode-descriptionForeground); }
   .description table { border-collapse: collapse; margin: 8px 0; }
   .description th, .description td { border: 1px solid var(--vscode-panel-border); padding: 4px 8px; }

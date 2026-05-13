@@ -129,6 +129,17 @@ export class AzureDevOpsClient {
         return data.value;
     }
 
+    /**
+     * Fetch a single PR by id. The list endpoints return a truncated
+     * `description`; this endpoint returns the full body.
+     */
+    async getPullRequest(repoId: string, prId: number): Promise<PullRequest> {
+        const project = this.getProject();
+        return this.apiFetch<PullRequest>(
+            `${this.getOrgUrl()}/${project}/_apis/git/repositories/${repoId}/pullrequests/${prId}?api-version=7.1`
+        );
+    }
+
     async getPullRequestIterations(repoId: string, prId: number): Promise<Iteration[]> {
         const project = this.getProject();
         const data = await this.apiFetch<{ value: Iteration[] }>(
